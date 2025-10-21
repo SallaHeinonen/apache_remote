@@ -139,7 +139,7 @@ Create user accounts for Guacamole with Python a script
 
 	pip install mysql_connector_python
 
-- Python script creation:
+- Python script creation (Also found in this repository):
 
 	nano database_users.py
 
@@ -291,4 +291,5 @@ NOTE! In this version, the Python script:
 
 The script needs to be edited in order to allow the users to create connections or during account creation 
 make one connection to the server machine. 
+
 The Python script is easily modified with the MySQL queries handling the Guacamole database.
