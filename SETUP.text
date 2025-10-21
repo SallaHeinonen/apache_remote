@@ -1,0 +1,294 @@
+This text file includes the inital steps for creating a running Apache Guacamole web service with MySQL database and user creation for Ubuntu 22.04.
+Prerequisites: Docker, Docker Compose, TensorFlow, Python 3.10.
+
+NOTE! Does NOT include internet or port fowarding related configurations. Requires an IP address different devices can connect to via HTTPS.
+All configurations are easily modified based on requirements.
+
+Using root user, the data directory will be created in /opt/ in the server computer.
+
+- Create the directories and sub-directories.
+
+	cd opt/
+
+	mkdir docker
+	mkdir mysql
+	mkdir python
+
+	cd docker/
+
+	mkdir mysql_data
+
+- Create the docker-compose YAML-file (Found in this repository)
+
+	nano docker-compose.yml
+	
+- The file contains these configurations:
+                                                       
+    version: '3'
+    services:
+    guacd:
+        image: guacamole/guacd
+        container_name: guacd
+        restart: always
+
+    db:
+        image: mysql
+        container_name: guac_mysql
+        restart: always
+        environment:
+        MYSQL_ROOT_PASSWORD: tensor # Change into something more complex later or use secret
+        MYSQL_DATABASE: guacamole_db
+        MYSQL_USER: testuser # Change the user and password as well
+        MYSQL_PASSWORD: test
+        volumes:
+        - /opt/docker/mysql_data:/var/lib/mysql
+        - /opt/mysql:/script
+        ports:
+        - 3307:3306
+
+    guacamole:
+        image: guacamole/guacamole
+        container_name: guacamole
+        restart: always
+        environment:
+        GUACD_HOSTNAME: guacd
+        MYSQL_HOSTNAME: guac_mysql # This has to be the same as the container_name in db.
+        MYSQL_DATABASE: guacamole_db
+        MYSQL_PORT: 3306
+        MYSQL_USER: testuser # These environment variables are the same as the one in db.
+        MYSQL_PASSWORD: test
+        depends_on:
+        - guacd
+        - db
+        ports:
+        - 8080:8080
+
+- Save by pressing Ctrl+S and exiting by Ctrl+X.
+
+- Start the service in the same directory, where the YAML-file is.
+
+	docker-compose up -d
+
+- Create a script to initialize the database.
+
+	cd /opt/mysql/
+
+	nano initdb.sql
+
+- At this phase the file is epmty, just save and exit.
+
+- Give permissions to everyone for the file.
+
+	chmod 666 initdb.sql
+
+- Run a command in the same directory, that brings all the required SQL expressions, configurations and creates a schema into the sql-file.
+
+	docker run --rm guacamole/guacamole /opt/guacamole/bin/initdb.sh --mysql > /opt/mysql/initdb.sql
+
+- Enter the container and go to the directory of the script, that was assigned in docker-compose.
+
+	docker container exec -it guac_mysql /bin/sh
+	(or
+    docker container exec -it guac_mysql bash)
+
+	cd /script/
+
+	mysql -u root -p guacamole_db < initdb.sql
+
+	mysql -u root -p
+
+- In the MySql terminal, create a custom user with privileges that will add users to the database.
+
+	CREATE USER 'pythonadmin'@'%' IDENTIFIED BY 'secretpass';
+
+	GRANT SELECT, INSERT, UPDATE, DELETE ON guacamole_db.* TO 'pythonadmin'@'%';
+	FLUSH PRIVILEGES;
+
+- Exit MySql, bash and restart Docker Compose.
+	
+	exit;
+
+	exit
+
+	docker-compose down
+
+	docker-compose up
+	
+- When logging into Guacamole for the first time, the default admin account username and password is "guacadmin". It is highly recommended to 
+change this before opening the service for the public.
+
+NOTE! With guacadmin:
+- Ignore server certificate
+- Display settings, 32 bit, Display Update virtual channel rdp 8.1
+
+*********************************************************************
+
+Create user accounts for Guacamole with Python a script
+
+- Move to the Python directory and create a .csv-file.
+
+	cd /opt/python
+
+	nano users.csv
+
+- The file contains columns for email, username, password and full_name with example data. (Found in this repository)
+
+- Save with Ctrl+S and exit with Ctrl+X.
+
+- Install the latest Python/MySQL connector.
+
+	pip install mysql_connector_python
+
+- Python script creation:
+
+	nano database_users.py
+
+    import csv
+    import hashlib
+    import random
+    import string
+    import mysql.connector
+    import smtplib
+    from email.mime.text import MIMEText
+    from mysql.connector import Error
+
+    # Constants
+    CSV_PATH = '/opt/python/users.csv'
+
+    DB_CONFIG = {
+        'host': '127.0.0.1',
+        'port': 3307,
+        'database': 'guacamole_db',
+        'user': 'pythonadmin',
+        'password': 'secretpass'
+    }
+
+    # For the test demonstration, a gmail address was created and used for sending the emails.
+
+    SMTP_SERVER = 'smtp.gmail.com'
+    SMTP_PORT = 587
+    SMTP_USER = 'tensorflowserverproject@gmail.com'
+    SMTP_PASS = 'ksdi nkgz vdmi mpcc'
+    EMAIL_FROM = SMTP_USER
+
+
+    def generate_password(length=10):
+        return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+
+
+    def sha256(password):
+        return hashlib.sha256(password.encode()).digest()  # Binary hash for Guacamole
+
+
+    # Mail generation 
+
+    def send_email(recipient, password):
+        body = f"""You have been given an account for the Tensorflow's remote access system.
+    n\Your temporary password for Apache Guacamole remote access is: {password}
+    \nPlease change your password after logging in. \nUse this email address for login.
+    \nThis is an automated message."""
+        msg = MIMEText(body)
+        msg['Subject'] = 'Login details for Guacamole'
+        msg['From'] = EMAIL_FROM
+        msg['To'] = recipient
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(EMAIL_FROM, [recipient], msg.as_string())
+
+    # User creation for the database
+
+    def create_user(email, db_conn):
+        cursor = db_conn.cursor()
+
+        # Check if user (entity) exists
+        cursor.execute("SELECT entity_id FROM guacamole_entity WHERE name = %s AND type = 'USER'", (email,))
+        if cursor.fetchone():
+            print(f"[!] User {email} already exists.")
+            return
+
+        password = generate_password()
+        hashed_pw = sha256(password)
+
+        
+        # Insert into guacamole_entity to create the entity first
+        cursor.execute("""
+            INSERT INTO guacamole_entity (name, type)
+            VALUES (%s, 'USER')
+        """, (email,))
+        db_conn.commit()
+
+        # Get the entity_id for the newly created user
+        cursor.execute("SELECT entity_id FROM guacamole_entity WHERE name = %s AND type = 'USER'", (email,))
+        entity_id = cursor.fetchone()[0]
+
+        # Insert into guacamole_user with the entity_id
+        cursor.execute("""
+            INSERT INTO guacamole_user (
+                entity_id, password_hash, password_salt, password_date, 
+                full_name, email_address
+            ) VALUES (
+                %s, %s, NULL, NOW(),
+                %s, %s
+            )
+        """, (entity_id, hashed_pw, email.split('@')[0], email))
+        db_conn.commit()
+
+        # Get the user_id for the same user
+        cursor.execute("SELECT user_id FROM guacamole_user WHERE entity_id = %s", (entity_id,))
+        user_id = cursor.fetchone()[0]
+
+        # Grant the user permission to change their own password (via the user permission)
+        cursor.execute("""
+            INSERT INTO guacamole_user_permission (entity_id, affected_user_id, permission)
+            VALUES (%s, %s, 'UPDATE')
+        """, (entity_id, user_id))
+        db_conn.commit()
+        
+        print(f"[+] Created user {email} with temporary password: {password}")
+        send_email(email, password)
+
+
+    def main():
+        try:
+            connection = mysql.connector.connect(**DB_CONFIG)
+            if connection.is_connected():
+                print("[+] Connected to MySQL with assigned adminuser!")
+
+                with open(CSV_PATH, newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        email = row['email'].strip()
+                        if email:
+                            create_user(email, connection)
+
+        except Error as e:
+            print(f"[X] MySQL connection error: {e}")
+
+        finally:
+            if 'connection' in locals() and connection.is_connected():
+                connection.close()
+                print("[+] MySQL connection closed.")
+
+
+    if __name__ == '__main__':
+        main()
+
+
+- Save and exit
+
+- Modify permissions for the file
+
+	chmod +x database_users.py
+
+- The script is ran inside the directory:
+
+    python3 database_users.py
+
+
+NOTE! In this version, the Python script:
+- Creates a user with permissions to change their password.
+
+The script needs to be edited in order to allow the users to create connections or during account creation 
+make one connection to the server machine. 
+The Python script is easily modified with the MySQL queries handling the Guacamole database.

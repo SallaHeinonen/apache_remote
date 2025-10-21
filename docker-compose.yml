@@ -1,0 +1,38 @@
+version: '3'
+services:
+  guacd:
+    image: guacamole/guacd
+    container_name: guacd
+    restart: always
+
+  db:
+    image: mysql
+    container_name: guac_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: tensor # Change into something more complex later or use secret
+      MYSQL_DATABASE: guacamole_db
+      MYSQL_USER: testuser # Change the user and password as well
+      MYSQL_PASSWORD: test
+    volumes:
+      - /opt/docker/mysql_data:/var/lib/mysql
+      - /opt/mysql:/script
+    ports:
+      - 3307:3306
+
+  guacamole:
+    image: guacamole/guacamole
+    container_name: guacamole
+    restart: always
+    environment:
+      GUACD_HOSTNAME: guacd
+      MYSQL_HOSTNAME: guac_mysql # This has to be the same as the container name in db.
+      MYSQL_DATABASE: guacamole_db
+      MYSQL_PORT: 3306
+      MYSQL_USER: testuser # These environment variables are the same as the one in db.
+      MYSQL_PASSWORD: test
+    depends_on:
+      - guacd
+      - db
+    ports:
+      - 8080:8080
